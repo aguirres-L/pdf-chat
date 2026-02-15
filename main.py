@@ -55,8 +55,11 @@ _CORS_ORIGINS = _get_env_list(
     [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        # Producción (Netlify). Igual es mejor configurarlo por env en Render.
+        "https://pdf-chat-ui.netlify.app",
     ],
 )
+_CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX") or ""
 _MAX_CONTEXT_CHARS = _get_env_int("MAX_CONTEXT_CHARS", 60_000)
 _GEMINI_MODEL = _normalizar_modelo(os.getenv("GEMINI_MODEL") or "gemini-flash-latest")
 
@@ -134,6 +137,7 @@ app = FastAPI(title="PDF Chat API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
+    allow_origin_regex=_CORS_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
