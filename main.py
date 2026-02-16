@@ -100,6 +100,26 @@ def _obtener_llm() -> ChatGoogleGenerativeAI:
         google_api_key=google_api_key,
     )
 
+
+def _obtener_llm_refinador() -> ChatGoogleGenerativeAI:
+    """
+    Modelo para "IA adicional": misma base, pero permitimos un poco más de elaboración.
+    Mantener temperatura moderada para evitar alucinaciones.
+    """
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    if not google_api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="Falta GOOGLE_API_KEY. Configurala en tu .env o variables de entorno.",
+        )
+
+    return ChatGoogleGenerativeAI(
+        model=_GEMINI_MODEL,
+        temperature=0.35,
+        google_api_key=google_api_key,
+    )
+
+
 def _coerce_text(valor: Any) -> str:
     """
     Normaliza distintas formas de "content" a string.
@@ -152,6 +172,7 @@ class UploadPdfResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     pregunta: str = Field(..., min_length=1, max_length=4000)
+    usar_ia_adicional: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -222,39 +243,90 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     contexto = texto_pdf[:_MAX_CONTEXT_CHARS]
 
-    system = (
+    def _invocar_o_fallar(llm: ChatGoogleGenerativeAI, system: str, prompt: str) -> str:
+        try:
+            resultado = llm.invoke([SystemMessage(content=system), HumanMessage(content=prompt)])
+            contenido = getattr(resultado, "content", resultado)
+            texto = _coerce_text(contenido).strip()
+            return texto or "No pude generar una respuesta en este momento."
+        except Exception as e:
+            # Mensaje acotado para debugging (sin exponer secrets).
+            msg = str(e) or "Error desconocido"
+            if len(msg) > 600:
+                msg = msg[:600] + "…"
+            if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
+                msg = (
+                    msg
+                    + " (probable cuota/plan: revisá límites en ai.google.dev y el link de rate limits)"
+                )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Error consultando el modelo (Gemini): {msg}",
+            )
+
+    # Paso 1: respuesta base (solo PDF), equivalente al comportamiento actual.
+    system_pdf = (
         "Sos un asistente B2B. Respondé usando SOLO el contenido del PDF provisto como contexto. "
         "Si la respuesta no está en el PDF, decí explícitamente que no la encontrás en el documento."
     )
-
-    prompt = (
+    prompt_pdf = (
         "### Contexto (PDF)\n"
         f"{contexto}\n\n"
         "### Pregunta\n"
         f"{req.pregunta}\n"
     )
 
-    llm = _obtener_llm()
+    respuesta_base = _invocar_o_fallar(_obtener_llm(), system_pdf, prompt_pdf)
+
+    # Si no se pidió IA adicional, devolvemos la respuesta base.
+    if not req.usar_ia_adicional:
+        return ChatResponse(
+            respuesta=respuesta_base,
+            modelo=_GEMINI_MODEL,
+            charsContextoUsados=len(contexto),
+        )
+
+    # Paso 2: refinamiento usando la respuesta base como contexto adicional.
+    # Importante: NO reinyectamos el PDF completo para evitar prompts enormes; refinamos a partir
+    # de (pregunta + respuesta_base), donde respuesta_base ya fue generada usando SOLO el PDF.
+    system_refine = (
+        "Sos un asistente experto. Vas a refinar una 'respuesta base' que fue generada usando "
+        "EXCLUSIVAMENTE el PDF del usuario. No inventes afirmaciones como si fueran del PDF. "
+        "Podés usar conocimiento general SOLO para explicar mejor, dar contexto o proponer pasos, "
+        "pero si agregás algo que no esté explícito en la respuesta base, marcá la sección como "
+        "'Conocimiento general'. Si falta información para responder con certeza, decilo."
+    )
+    prompt_refine = (
+        "### Pregunta del usuario\n"
+        f"{req.pregunta}\n\n"
+        "### Respuesta base (solo PDF)\n"
+        f"{respuesta_base}\n\n"
+        "### Tarea\n"
+        "- Reescribí la respuesta base para que sea más clara, completa y accionable.\n"
+        "- Conservá la fidelidad a lo que dice el PDF.\n"
+        "- Si el PDF no alcanza para responder del todo, indicá qué falta.\n"
+        "- Usá formato con viñetas/pasos cuando ayude.\n"
+    )
+
     try:
-        resultado = llm.invoke([SystemMessage(content=system), HumanMessage(content=prompt)])
-        contenido = getattr(resultado, "content", resultado)
-        respuesta = _coerce_text(contenido).strip()
-        if not respuesta:
-            respuesta = "No pude generar una respuesta en este momento."
-    except Exception as e:
-        # Mensaje acotado para debugging (sin exponer secrets).
-        msg = str(e) or "Error desconocido"
-        if len(msg) > 600:
-            msg = msg[:600] + "…"
-        if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
-            msg = (
-                msg
-                + " (probable cuota/plan: revisá límites en ai.google.dev y el link de rate limits)"
+        respuesta_refinada = _invocar_o_fallar(
+            _obtener_llm_refinador(),
+            system_refine,
+            prompt_refine,
+        )
+    except HTTPException as e:
+        # Fallback: en alta demanda/cuota o errores, devolvemos la respuesta base.
+        # No "rompemos" el chat por el paso adicional.
+        if e.status_code in (429, 502):
+            return ChatResponse(
+                respuesta=respuesta_base,
+                modelo=_GEMINI_MODEL,
+                charsContextoUsados=len(contexto),
             )
-        raise HTTPException(status_code=502, detail=f"Error consultando el modelo (Gemini): {msg}")
+        raise
 
     return ChatResponse(
-        respuesta=respuesta,
+        respuesta=respuesta_refinada,
         modelo=_GEMINI_MODEL,
         charsContextoUsados=len(contexto),
     )

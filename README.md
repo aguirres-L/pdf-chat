@@ -32,7 +32,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - `GET /health`
 - `POST /api/pdf` (form-data `file`)
 - `GET /api/pdf/status`
-- `POST /api/chat` (JSON `{ "pregunta": "..." }`)
+- `POST /api/chat` (JSON `{ "pregunta": "...", "usar_ia_adicional": false }`)
 
 ## Notas importantes (limitaciones fase 1)
 - El PDF se guarda en memoria (solo “el último PDF”).
