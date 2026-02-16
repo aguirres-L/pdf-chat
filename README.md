@@ -28,6 +28,15 @@ Ejecutar:
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## CORS (Netlify / Render)
+Si tu UI en Netlify te muestra un error tipo “blocked by CORS policy”, asegurate de que en Render
+estén configuradas estas variables (y redeploy luego de cambiarlas):
+
+- `CORS_ORIGINS`: lista separada por comas, sin `/` al final. Ejemplo:
+  - `https://pdf-chat-ui.netlify.app,http://localhost:5173`
+- (Opcional) `CORS_ORIGIN_REGEX`: útil para previews de Netlify. Ejemplo:
+  - `^https://.*\\.netlify\\.app$`
+
 ## Endpoints
 - `GET /health`
 - `POST /api/pdf` (form-data `file`)

@@ -50,16 +50,24 @@ def _get_env_list(nombre: str, por_defecto: list[str]) -> list[str]:
     return [x for x in items if x]
 
 
-_CORS_ORIGINS = _get_env_list(
-    "CORS_ORIGINS",
-    [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        # Producción (Netlify). Igual es mejor configurarlo por env en Render.
-        "https://pdf-chat-ui.netlify.app",
-    ],
+_CORS_DEFAULT_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    # Producción (Netlify).
+    "https://pdf-chat-ui.netlify.app",
+]
+
+# Importante: en Render es común setear CORS_ORIGINS y olvidarse de incluir producción/local.
+# Para evitar cortes, siempre incluimos los defaults además de lo que venga por env.
+_cors_from_env = _get_env_list("CORS_ORIGINS", _CORS_DEFAULT_ORIGINS)
+_CORS_ORIGINS = list(
+    dict.fromkeys(
+        [_normalizar_origin(x) for x in (_cors_from_env + _CORS_DEFAULT_ORIGINS) if _normalizar_origin(x)]
+    )
 )
-_CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX") or ""
+
+# Regex opcional, útil para deploy previews de Netlify u otros subdominios.
+_CORS_ORIGIN_REGEX = (os.getenv("CORS_ORIGIN_REGEX") or "").strip()
 _MAX_CONTEXT_CHARS = _get_env_int("MAX_CONTEXT_CHARS", 60_000)
 _GEMINI_MODEL = _normalizar_modelo(os.getenv("GEMINI_MODEL") or "gemini-flash-latest")
 
